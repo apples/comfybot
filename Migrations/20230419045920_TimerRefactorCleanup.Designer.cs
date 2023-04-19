@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -9,9 +10,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace ComfyBot.Migrations
 {
     [DbContext(typeof(ComfyContext))]
-    partial class ComfyContextModelSnapshot : ModelSnapshot
+    [Migration("20230419045920_TimerRefactorCleanup")]
+    partial class TimerRefactorCleanup
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "7.0.4");
@@ -87,8 +90,6 @@ namespace ComfyBot.Migrations
                     b.HasKey("ScheduledEventOccurrenceId");
 
                     b.HasIndex("ScheduledEventId");
-
-                    b.HasIndex("When");
 
                     b.ToTable("ScheduledEventOccurences");
                 });

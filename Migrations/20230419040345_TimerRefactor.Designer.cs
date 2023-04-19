@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -9,9 +10,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace ComfyBot.Migrations
 {
     [DbContext(typeof(ComfyContext))]
-    partial class ComfyContextModelSnapshot : ModelSnapshot
+    [Migration("20230419040345_TimerRefactor")]
+    partial class TimerRefactor
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "7.0.4");
@@ -41,6 +44,9 @@ namespace ComfyBot.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset?>("End")
+                        .HasColumnType("TEXT");
+
                     b.Property<long?>("EndTime")
                         .HasColumnType("INTEGER");
 
@@ -56,8 +62,14 @@ namespace ComfyBot.Migrations
                     b.Property<int>("RecurrenceValue")
                         .HasColumnType("INTEGER");
 
+                    b.Property<TimeSpan?>("Reminder")
+                        .HasColumnType("TEXT");
+
                     b.Property<long?>("ReminderDuration")
                         .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("Start")
+                        .HasColumnType("TEXT");
 
                     b.Property<long?>("StartTime")
                         .HasColumnType("INTEGER");
@@ -87,8 +99,6 @@ namespace ComfyBot.Migrations
                     b.HasKey("ScheduledEventOccurrenceId");
 
                     b.HasIndex("ScheduledEventId");
-
-                    b.HasIndex("When");
 
                     b.ToTable("ScheduledEventOccurences");
                 });

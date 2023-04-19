@@ -11,9 +11,9 @@ public static class EmbedBuilderExtensions
             .AddEmptyField();
 
         embed
-            .AddField("Start", e.Start.ToEmbed(), true);
-        if (e.End != null)
-            embed.AddField("End", e.End.ToEmbed(), true);
+            .AddField("Start", e.StartTime.ToEmbedAsTimestamp(), true);
+        if (e.EndTime != null)
+            embed.AddField("End", e.EndTime.ToEmbedAsTimestamp(), true);
         else
             embed.AddEmptyField();
         embed.AddEmptyField();
@@ -28,13 +28,15 @@ public static class EmbedBuilderExtensions
         {
             embed
                 .AddField("Recurrence", e.Recurrence.ToString(), true)
-                .AddField("Recurrence Interval", e.RecurrenceValue)
+                .AddField("Recurrence Interval", e.RecurrenceValue, true)
                 .AddEmptyField();
         }
 
-        embed
-            .AddField("Reminder", e.Reminder == null ? "None" : e.Reminder.ToString(), true)
-            .AddEmptyField().AddEmptyField();
+        if (e.ReminderDuration != null && e.StartTime != null)
+            embed.AddField("Reminder", TimeSpan.FromSeconds(e.StartTime.Value - e.ReminderDuration.Value).ToString(), true);
+        else
+            embed.AddField("Reminder", "none", true);
+        embed.AddEmptyField().AddEmptyField();
 
         embed
             .AddField("Description", e.Description, false);
@@ -48,13 +50,13 @@ public static class EmbedBuilderExtensions
             .AddField("Event", e.Name, true)
             .AddEmptyField().AddEmptyField();
 
-        embed
-            .AddField("Start", e.Start.ToEmbed(), true)
-            .AddField("End", e.End.ToEmbed(), true)
-            .AddEmptyField();
+        embed.AddField("Start", e.StartTime.ToEmbedAsTimestamp(), true);
+        if (e.EndTime != null)
+            embed.AddField("End", e.EndTime.ToEmbedAsTimestamp(), true);
+        else
+            embed.AddEmptyField();
 
-        embed
-            .AddField("Description", e.Description, false);
+        embed.AddField("Description", e.Description, false);
 
         return embed;
     }

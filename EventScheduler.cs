@@ -4,14 +4,13 @@ using Discord.WebSocket;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
-public sealed class EventScheduler : IDisposable
+public sealed class EventScheduler
 {
-    private Dictionary<ulong, Timer> _timers = new();
-
-    private object _lock = new();
-
     private IServiceProvider _services;
     private DiscordSocketClient _client;
+
+    private Timer? _current_timer;
+    private long _current_timer_due;
 
     public EventScheduler(IServiceProvider services, DiscordSocketClient client)
     {
@@ -26,61 +25,210 @@ public sealed class EventScheduler : IDisposable
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ComfyContext>();
 
-        await foreach (var e in db.ScheduledEvents)
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        await db.ScheduledEventOccurences.ExecuteDeleteAsync();
+
+        var futureEvents = await db.ScheduledEvents.Where(e => e.Recurrence != ScheduledEvent.RecurrenceKind.Once || (e.StartTime - e.ReminderDuration) > now || e.StartTime > now).ToListAsync();
+
+        foreach (var e in futureEvents)
         {
-            CreateTimer(e);
+            InsertOccurrences(db, e, now);
         }
+
+        await db.SaveChangesAsync();
 
         Console.WriteLine("Bootstrapping timers done.");
     }
 
-    public void Dispose()
+    public async Task UpdateOccurrences(ComfyContext db, ScheduledEvent e)
     {
-        lock (_lock)
+        var occurrences = await db.ScheduledEventOccurences.Where(o => o.ScheduledEventId == e.ScheduledEventId).ToListAsync();
+
+        var nextStart = e.GetNextStart();
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        Console.WriteLine($"{nextStart} {now}");
+
+        if (nextStart == null)
         {
-            foreach (var x in _timers)
+            db.RemoveRange(occurrences);
+            return;
+        }
+
+        // reminders
+
+        var reminderOccurrences = occurrences.Where(x => x.IsReminder).ToList();
+
+        if (e.ReminderDuration != null && nextStart - e.ReminderDuration.Value > now)
+        {
+            db.RemoveRange(reminderOccurrences.Skip(1));
+
+            var when = nextStart.Value - e.ReminderDuration.Value;
+
+            if (reminderOccurrences.Count == 0)
             {
-                x.Value.Dispose();
+                var newOccurrence = new ScheduledEventOccurrence
+                {
+                    ScheduledEventId = e.ScheduledEventId,
+                    When = when,
+                    IsReminder = true,
+                };
+
+                db.Add(newOccurrence);
+            }
+            else
+            {
+                reminderOccurrences[0].When = when;
             }
 
-            _timers.Clear();
-        }
-    }
-
-    public void UpdateSchedule(ScheduledEvent e)
-    {
-        if (e.Start == null)
-        {
-            DeleteSchedule(e);
+            PokeTimer(when);
         }
         else
         {
-            CreateTimer(e);
+            db.RemoveRange(reminderOccurrences);
         }
+
+        // starts
+
+        var startOccurrences = occurrences.Where(x => !x.IsReminder).ToList();
+
+        db.RemoveRange(startOccurrences.Skip(1));
+
+        if (startOccurrences.Count == 0)
+        {
+            var newOccurrence = new ScheduledEventOccurrence
+            {
+                ScheduledEventId = e.ScheduledEventId,
+                When = nextStart.Value,
+                IsReminder = false,
+            };
+
+            db.Add(newOccurrence);
+        }
+        else
+        {
+            startOccurrences[0].When = nextStart.Value;
+        }
+
+        e.StartTime = nextStart;
+
+        PokeTimer(nextStart.Value);
     }
 
-    public void AddSchedule(ScheduledEvent e)
+    public Task DeleteOccurrences(ComfyContext db, ScheduledEvent e)
     {
-        CreateTimer(e);
+        throw new NotImplementedException();
     }
 
-    public void DeleteSchedule(ScheduledEvent e)
+    private void InsertOccurrences(ComfyContext db, ScheduledEvent e, long now)
     {
-        EraseTimer(e.ScheduledEventId);
+        var nextStart = e.GetNextStart();
+
+        if (nextStart == null)
+            return;
+
+        if (e.ReminderDuration != null)
+        {
+            var reminderTime = nextStart.Value - e.ReminderDuration.Value;
+
+            if (reminderTime > now)
+            {
+                var occurrenceReminder = new ScheduledEventOccurrence
+                {
+                    ScheduledEventId = e.ScheduledEventId,
+                    When = reminderTime,
+                    IsReminder = true,
+                };
+
+                db.Add(occurrenceReminder);
+            }
+        }
+
+        var occurrence = new ScheduledEventOccurrence
+        {
+            ScheduledEventId = e.ScheduledEventId,
+            When = nextStart.Value,
+            IsReminder = false,
+        };
+
+        db.Add(occurrence);
+
+        e.StartTime = nextStart;
+    }
+
+    private void PokeTimer(long nextStart)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        var duration = Math.Max(nextStart - now, 1);
+
+        var due = now + duration;
+
+        if (_current_timer == null)
+        {
+            _current_timer = new Timer(OnTimer);
+            _current_timer.Change(TimeSpan.FromSeconds(duration), Timeout.InfiniteTimeSpan);
+            _current_timer_due = due;
+            Console.WriteLine($"New timer due at {_current_timer_due}");
+            return;
+        }
+
+        if (_current_timer_due < due)
+            return;
+
+        _current_timer.Change(TimeSpan.FromSeconds(duration), Timeout.InfiniteTimeSpan);
+        _current_timer_due = due;
+        Console.WriteLine($"Updated timer due at {_current_timer_due}");
+    }
+
+    private async Task BumpTimer(ComfyContext db)
+    {
+        StopTimer();
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        var nextOccurrence = await db.ScheduledEventOccurences.Where(x => x.When > now).OrderBy(x => x.When).FirstOrDefaultAsync();
+
+        if (nextOccurrence != null)
+            PokeTimer(nextOccurrence.When);
+    }
+
+    private void StopTimer()
+    {
+        if (_current_timer != null)
+        {
+            Console.WriteLine("Stopping timer");
+            _current_timer.Dispose();
+            _current_timer = null;
+        }
     }
 
     private async void OnTimer(object? state)
     {
         try
         {
-            var timerInfo = state as TimerInfo;
+            await using var scope = _services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<ComfyContext>();
 
-            if (timerInfo == null)
-                return;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-            EraseTimer(timerInfo.ScheduledEventId);
+            var nextOccurrence = await db.ScheduledEventOccurences.Where(x => x.When > now).OrderBy(x => x.When).FirstOrDefaultAsync();
 
-            await ProcessTimer(timerInfo);
+            if (nextOccurrence != null)
+                PokeTimer(nextOccurrence.When);
+
+            var occurrences = await db.ScheduledEventOccurences.Where(x => x.When <= now).ToListAsync();
+
+            foreach (var e in occurrences)
+            {
+                await ProcessTimer(e, db);
+            }
+
+            await db.SaveChangesAsync();
+
+            await BumpTimer(db);
         }
         catch (Exception e)
         {
@@ -88,28 +236,14 @@ public sealed class EventScheduler : IDisposable
         }
     }
 
-    private async Task ProcessTimer(TimerInfo timerInfo)
+    private async Task ProcessTimer(ScheduledEventOccurrence occurrence, ComfyContext db)
     {
-        Console.WriteLine($"Timer firing for event {timerInfo.ScheduledEventId}");
+        Console.WriteLine($"Timer firing for event {occurrence.ScheduledEventId}");
 
-        ScheduledEvent? e;
-        await using (var scope = _services.CreateAsyncScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<ComfyContext>();
-            e = await db.ScheduledEvents.FindAsync(timerInfo.ScheduledEventId);
-        }
+        var e = await db.ScheduledEvents.FindAsync(occurrence.ScheduledEventId);
 
-        if (e == null || e.GetNextStart() == null)
+        if (e == null)
             return;
-
-        if (timerInfo.IsReminder)
-        {
-            CreateStartTimer(e);
-        }
-        else if (e.Recurrence != ScheduledEvent.RecurrenceKind.Once)
-        {
-            CreateTimer(e);
-        }
 
         SocketTextChannel? channel = null;
 
@@ -132,49 +266,48 @@ public sealed class EventScheduler : IDisposable
 
         var embed = new EmbedBuilder();
 
-        if (timerInfo.IsReminder)
+        if (occurrence.IsReminder)
         {
-            var startingIn = TimeSpan.FromSeconds(Math.Round((e.GetNextStart().Value - DateTimeOffset.Now).TotalSeconds));
+            var startingIn = e.StartTime - occurrence.When;
 
-            List<Tuple<int, string>> seq = new(4);
+            var days = startingIn / (24 * 60 * 60);
+            var hours = startingIn / (60 * 60) % 24;
+            var minutes = startingIn / 60 % 60;
+            var seconds = startingIn % 60;
 
-            var hasDay = startingIn.TotalDays > 0;
-            var hasHour = startingIn.Hours > 0 || hasDay;
-            var hasMin = startingIn.Minutes > 0;
-            var hasSec = startingIn.Seconds > 0;
+            List<string> seq = new(4);
 
-            if (hasDay)
-            {
-                seq.Add(new((int)startingIn.TotalDays, "days"));
-            }
+            if (days > 0)
+                seq.Add($"{days} days");
 
-            if (hasHour)
-            {
-                seq.Add(new(startingIn.Hours, startingIn.Hours == 1 ? "hour" : "hours"));
-            }
+            if (hours > 0 || days > 0)
+                seq.Add($"{hours} hours");
 
-            if (hasMin || (hasHour && hasSec))
-            {
-                seq.Add(new(startingIn.Minutes, "minutes"));
-            }
+            if (minutes > 0 || ((hours > 0 || days > 0) && seconds > 0))
+                seq.Add($"{minutes} minutes");
 
-            if (hasSec)
-            {
-                seq.Add(new(startingIn.Seconds, "seconds"));
-            }
+            if (seconds > 0)
+                seq.Add($"{seconds} seconds");
 
             var str = "";
 
-            for (var i = 0; i < seq.Count; ++i)
+            if (seq.Count == 1)
             {
-                if (i == seq.Count - 1)
-                    str += $"and {seq[i].Item1} {seq[i].Item2}";
-                else
-                    str += $"{seq[i].Item1} {seq[i].Item2} ";
+                str = seq[0];
+            }
+            else
+            {
+                for (var i = 0; i < seq.Count; ++i)
+                {
+                    if (i == seq.Count - 1)
+                        str += $"and {seq[i]}";
+                    else
+                        str += $"{seq[i]}, ";
+                }
             }
 
             if (str == "")
-                str = $"{(int)startingIn.TotalSeconds} seconds";
+                str = $"{startingIn} seconds";
 
             embed.WithDescription($"**[Reminder]** Starting in {str}.")
                 .AddEventShort(e);
@@ -187,86 +320,9 @@ public sealed class EventScheduler : IDisposable
 
         var message = await channel.SendMessageAsync("", embed: embed.Build());
 
-        if (timerInfo.IsReminder)
+        if (occurrence.IsReminder)
             await message.AddReactionsAsync(new Emoji[] { "🟢", "❌" });
-    }
-
-    private void CreateTimer(ScheduledEvent e)
-    {
-        var start = e.GetNextStart();
-
-        if (start == null)
-            return;
         
-        if (e.Reminder == null)
-        {
-            CreateStartTimer(e);
-            return;
-        }
-
-        var reminderTime = start.Value - e.Reminder.Value;
-
-        var duration = reminderTime - DateTimeOffset.Now;
-
-        if (duration < TimeSpan.Zero)
-        {
-            CreateStartTimer(e);
-            return;
-        }
-
-        var timerInfo = new TimerInfo
-        {
-            ScheduledEventId = e.ScheduledEventId,
-            IsReminder = true,
-        };
-
-        lock (_lock)
-        {
-            EraseTimer(e.ScheduledEventId);
-            _timers[e.ScheduledEventId] = new Timer(OnTimer, timerInfo, duration, Timeout.InfiniteTimeSpan);
-        }
-    }
-
-    private void CreateStartTimer(ScheduledEvent e)
-    {
-        var start = e.GetNextStart();
-
-        if (start == null)
-            return;
-        
-        var duration = start.Value - DateTimeOffset.Now;
-
-        if (duration < TimeSpan.Zero)
-            return;
-
-        var timerInfo = new TimerInfo
-        {
-            ScheduledEventId = e.ScheduledEventId,
-            IsReminder = false,
-        };
-
-        lock (_lock)
-        {
-            EraseTimer(e.ScheduledEventId);
-            _timers[e.ScheduledEventId] = new Timer(OnTimer, timerInfo, duration, Timeout.InfiniteTimeSpan);
-        }
-    }
-
-    private void EraseTimer(ulong scheduledEventId)
-    {
-        lock (_lock)
-        {
-            if (_timers.TryGetValue(scheduledEventId, out var timer))
-            {
-                timer.Dispose();
-                _timers.Remove(scheduledEventId);
-            }
-        }
-    }
-
-    private class TimerInfo
-    {
-        public ulong ScheduledEventId { get; set; }
-        public bool IsReminder { get; set; }
+        await UpdateOccurrences(db, e);
     }
 }

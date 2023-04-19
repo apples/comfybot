@@ -10,16 +10,14 @@ namespace ComfyBot.Modules;
 public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
 {
     private ComfyContext _db;
-
+    private SwizzleService _swizzler;
     private EventScheduler _scheduler;
 
-    private SwizzleService _swizzler;
-
-    public ComfyEventModule(ComfyContext db, EventScheduler scheduler, SwizzleService swizzler)
+    public ComfyEventModule(ComfyContext db, SwizzleService swizzler, EventScheduler scheduler)
     {
         _db = db;
-        _scheduler = scheduler;
         _swizzler = swizzler;
+        _scheduler = scheduler;
     }
 
     [SlashCommand(name: "create", description: "Creates an event")]
@@ -36,10 +34,25 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
 
         await _db.SaveChangesAsync();
 
-        _scheduler.AddSchedule(e);
-
         var embed = new EmbedBuilder()
             .WithDescription("Created event!")
+            .AddEvent(e, _swizzler);
+
+        await RespondAsync("", embed: embed.Build());
+    }
+
+    [SlashCommand(name: "show", description: "Show the event")]
+    public async Task Show(string id)
+    {
+        var e = await GetEvent(id);
+
+        if (e == null)
+        {
+            await RespondAsync("Event not found.");
+            return;
+        }
+
+        var embed = new EmbedBuilder()
             .AddEvent(e, _swizzler);
 
         await RespondAsync("", embed: embed.Build());
@@ -62,9 +75,9 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
         if (description != null)
             e.Description = description;
 
-        await _db.SaveChangesAsync();
+        await _scheduler.UpdateOccurrences(_db, e);
 
-        _scheduler.UpdateSchedule(e);
+        await _db.SaveChangesAsync();
 
         var embed = new EmbedBuilder()
             .WithDescription("Updated details.")
@@ -101,12 +114,12 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
             return;
         }
 
-        e.Start = dtStart;
-        e.End = dtEnd;
+        e.StartTime = dtStart.Value.ToUnixTimeSeconds();
+        e.EndTime = dtEnd == null ? null : dtEnd.Value.ToUnixTimeSeconds();
+
+        await _scheduler.UpdateOccurrences(_db, e);
 
         await _db.SaveChangesAsync();
-
-        _scheduler.UpdateSchedule(e);
 
         var embed = new EmbedBuilder()
             .WithDescription("Updated start and end time.")
@@ -129,9 +142,9 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
         e.Recurrence = recur;
         e.RecurrenceValue = interval;
 
-        await _db.SaveChangesAsync();
+        await _scheduler.UpdateOccurrences(_db, e);
 
-        _scheduler.UpdateSchedule(e);
+        await _db.SaveChangesAsync();
 
         var embed = new EmbedBuilder()
             .WithDescription("Updated recurrence.")
@@ -162,26 +175,26 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
 
         if (value == 0)
         {
-            e.Reminder = null;
+            e.ReminderDuration = null;
         }
         else
         {
-            e.Reminder = TimeSpan.FromSeconds(value);
+            e.ReminderDuration = value;
         }
 
-        await _db.SaveChangesAsync();
+        await _scheduler.UpdateOccurrences(_db, e);
 
-        _scheduler.UpdateSchedule(e);
+        await _db.SaveChangesAsync();
 
         var embed = new EmbedBuilder();
 
         if (value == 0)
         {
-            embed.WithDescription("Cleared recurrence.");
+            embed.WithDescription("Cleared reminder.");
         }
         else
         {
-            embed.WithDescription("Updated recurrence.");
+            embed.WithDescription("Updated reminder.");
         }
 
         embed.AddEvent(e, _swizzler);
@@ -200,7 +213,7 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
             return;
         }
 
-        _scheduler.DeleteSchedule(e);
+        await _scheduler.DeleteOccurrences(_db, e);
 
         _db.ScheduledEvents.Remove(e);
 
@@ -226,12 +239,12 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
             if (x.GuildId != Context.Guild.Id)
                 continue;
             
-            if (!include_old && x.Start != null && x.GetNextStart() < DateTimeOffset.UtcNow)
+            if (!include_old && x.StartTime != null && x.GetNextStart() < DateTimeOffset.UtcNow.ToUnixTimeSeconds())
                 continue;
 
             ids += $"`{_swizzler.Swizzle(x.ScheduledEventId)}`\n";
             names += $"{x.Name}\n";
-            starts += $"{x.Start.ToEmbed()}\n";
+            starts += $"{x.StartTime.ToEmbedAsTimestamp()}\n";
         }
 
         var embed = new EmbedBuilder();
@@ -252,6 +265,36 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
         await RespondAsync("", embed: embed.Build());
     }
 
+    [SlashCommand(name: "show-timers", description: "Show current event timers")]
+    public async Task ShowTimers()
+    {
+        var ids = "";
+        var names = "";
+        var whens = "";
+
+        await foreach (var occurrence in _db.ScheduledEventOccurences.Include(x => x.ScheduledEvent).OrderBy(x => x.When).AsAsyncEnumerable())
+        {
+            if (occurrence.ScheduledEvent == null || occurrence.ScheduledEvent.GuildId != Context.Guild.Id)
+                continue;
+
+            ids += $"`{_swizzler.Swizzle(occurrence.ScheduledEventId)}`\n";
+            names += $"{(occurrence.IsReminder ? "[Reminder]" : "[Start]")} {occurrence.ScheduledEvent.Name}\n";
+            whens += $"{occurrence.When.ToEmbedAsTimestamp()}\n";
+        }
+
+        var embed = new EmbedBuilder();
+
+        if (ids != "")
+            embed
+                .AddField("Event Id", ids, true)
+                .AddField("When", whens, true)
+                .AddField("Name", names, true);
+        else
+            embed.WithDescription("No pending timers.");
+
+        await RespondAsync("", embed: embed.Build());
+    }
+
     private async Task<ScheduledEvent?> GetEvent(string id)
     {
         try
@@ -266,7 +309,7 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
 
             return e;
         }
-        catch (Exception e)
+        catch (Exception)
         {
             return null;
         }
@@ -306,5 +349,4 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
 
         return userNow;
     }
-
 }

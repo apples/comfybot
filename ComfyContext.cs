@@ -8,6 +8,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 public class ComfyContext : DbContext
 {
     public DbSet<ScheduledEvent> ScheduledEvents { get; set; }
+    public DbSet<ScheduledEventOccurrence> ScheduledEventOccurences { get; set; }
     public DbSet<GuildSettings> GuildSettings { get; set; }
 
     public string DbPath { get; }
@@ -16,7 +17,11 @@ public class ComfyContext : DbContext
     {
         var folder = Environment.SpecialFolder.LocalApplicationData;
         var path = System.IO.Path.Join(Environment.GetFolderPath(folder), "ComfyBot");
-        System.IO.Directory.CreateDirectory(path);
+        if (!System.IO.Directory.Exists(path))
+        {
+            Console.WriteLine($"Creating database directory \"{path}\"");
+            System.IO.Directory.CreateDirectory(path);
+        }
         DbPath = System.IO.Path.Join(path, "data.db");
     }
 
@@ -27,59 +32,71 @@ public class ComfyContext : DbContext
             .UseSqlite($"Data Source={DbPath}");
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
-        => modelBuilder
+    {
+        modelBuilder
             .Entity<ScheduledEvent>()
                 .Navigation(x => x.GuildSettings).AutoInclude();
+    }
 }
 
+/// <summary>
+/// All times are Unix second timestamps, durations are seconds.
+/// </summary>
 public class ScheduledEvent
 {
     public ulong ScheduledEventId { get; set; }
     [ForeignKey(nameof(GuildSettings))] public ulong GuildId { get; set; }
     public string? Name { get; set; }
     public string? Description { get; set; }
-    public DateTimeOffset? Start { get; set; } = null;
-    public DateTimeOffset? End { get; set; } = null;
+    public long? StartTime { get; set; } = null;
+    public long? EndTime { get; set; } = null;
+    public long? ReminderDuration { get; set; } = null;
     public RecurrenceKind Recurrence { get; set; } = RecurrenceKind.Once;
     public int RecurrenceValue { get; set; } = 0;
-    public TimeSpan? Reminder { get; set; } = null;
 
     public GuildSettings? GuildSettings { get; set; }
 
-    private DateTimeOffset? _memoGetNextStartParam;
-    private DateTimeOffset? _memoGetNextStartResult;
+    private long? _memoGetNextStartParam;
+    private long? _memoGetNextStartResult;
 
-    public DateTimeOffset? GetNextStart()
+    public long? GetNextStart()
     {
-        if (Start == null)
+        if (StartTime == null)
             return null;
 
-        if (_memoGetNextStartParam == Start)
+        if (_memoGetNextStartParam == StartTime)
             return _memoGetNextStartResult;
 
-        _memoGetNextStartParam = Start;
+        _memoGetNextStartParam = StartTime;
         _memoGetNextStartResult = GetNextStartNoMemo();
 
         return _memoGetNextStartResult;
     }
 
-    private DateTimeOffset? GetNextStartNoMemo()
+    private long? GetNextStartNoMemo()
     {
-        if (Start == null)
+        if (StartTime == null)
             return null;
 
-        if (Start.Value - DateTimeOffset.Now > TimeSpan.Zero || Recurrence == RecurrenceKind.Once)
-            return Start;
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        if (StartTime.Value > now)
+            return StartTime;
+        
+        if (Recurrence == RecurrenceKind.Once)
+            return null;
+
+        var start = DateTimeOffset.FromUnixTimeSeconds(StartTime.Value);
 
         var tz = GuildSettings?.Timezone != null ? DateTimeZoneProviders.Tzdb[GuildSettings.Timezone] : DateTimeZone.Utc;
 
-        var userStart = ZonedDateTime.FromDateTimeOffset(Start.Value).WithZone(tz);
+        var userStart = ZonedDateTime.FromDateTimeOffset(start).WithZone(tz);
 
         switch (Recurrence)
         {
             case RecurrenceKind.Weekly:
-                var diff = userStart - ZonedDateTime.FromDateTimeOffset(DateTimeOffset.UtcNow);
-                return userStart.LocalDateTime.PlusWeeks((int)diff.TotalDays / 7 + 1).InZoneLeniently(tz).ToDateTimeOffset();
+                var diff = ZonedDateTime.FromDateTimeOffset(DateTimeOffset.UtcNow) - userStart;
+                return userStart.LocalDateTime.PlusWeeks((int)diff.TotalDays / 7 + 1).InZoneLeniently(tz).ToDateTimeOffset().ToUnixTimeSeconds();
             default:
                 throw new NotSupportedException();
         };
@@ -98,4 +115,15 @@ public class GuildSettings
     public ulong GuildId { get; set; }
     public ulong? ReminderChannel { get; set; }
     public string? Timezone { get; set; }
+}
+
+[Index(nameof(When))]
+public class ScheduledEventOccurrence
+{
+    public ulong ScheduledEventOccurrenceId { get; set; }
+    [ForeignKey(nameof(ScheduledEvent))] public ulong ScheduledEventId { get; set; }
+    public long When { get; set; }
+    public bool IsReminder { get; set; }
+
+    public ScheduledEvent? ScheduledEvent { get; set; }
 }
