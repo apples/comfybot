@@ -33,7 +33,7 @@ public static class EmbedBuilderExtensions
         }
 
         if (e.ReminderDuration != null && e.StartTime != null)
-            embed.AddField("Reminder", TimeSpan.FromSeconds(e.StartTime.Value - e.ReminderDuration.Value).ToString(), true);
+            embed.AddField("Reminder", TimeSpan.FromSeconds(e.ReminderDuration.Value).ToString(), true);
         else
             embed.AddField("Reminder", "none", true);
         embed.AddEmptyField().AddEmptyField();
