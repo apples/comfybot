@@ -38,6 +38,8 @@ public sealed class EventScheduler
 
         await db.SaveChangesAsync();
 
+        await BumpTimer(db);
+
         Console.WriteLine("Bootstrapping timers done.");
     }
 
