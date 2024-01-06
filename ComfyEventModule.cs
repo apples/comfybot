@@ -213,7 +213,7 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
             return;
         }
 
-        await _scheduler.DeleteOccurrences(_db, e);
+        _scheduler.DeleteOccurrences(_db, e);
 
         _db.ScheduledEvents.Remove(e);
 
@@ -227,6 +227,41 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
         await RespondAsync("", embed: embed.Build());
     }
 
+    [SlashCommand(name: "delete-expired", description: "Delete all expired events")]
+    public async Task DeleteExpired()
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        var names = new List<string>();
+
+        await foreach (var e in _db.ScheduledEvents.Where(e => e.GuildId == Context.Guild.Id).ToAsyncEnumerable())
+        {
+            if (e.StartTime == null || e.GetNextStart() >= now)
+                continue;
+
+            _db.ScheduledEvents.Remove(e);
+
+            names.Add(e.Name ?? "(nameless)");
+        }
+
+        await _db.SaveChangesAsync();
+
+        var embed = new EmbedBuilder();
+
+        if (names.Count == 0)
+        {
+            embed.WithDescription("There are no expired events.");
+        }
+        else
+        {
+            embed
+                .WithDescription($"Deleted {names.Count} expired events.")
+                .AddField("Name", String.Join("\n", names), true);
+        }
+
+        await RespondAsync("", embed: embed.Build());
+    }
+
     [SlashCommand(name: "list", description: "List events")]
     public async Task List(bool include_old = false)
     {
@@ -234,12 +269,11 @@ public class ComfyEventModule : InteractionModuleBase<SocketInteractionContext>
         var names = "";
         var starts = "";
 
-        await foreach (var x in _db.ScheduledEvents)
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        await foreach (var x in _db.ScheduledEvents.Where(x => x.GuildId == Context.Guild.Id).AsAsyncEnumerable())
         {
-            if (x.GuildId != Context.Guild.Id)
-                continue;
-            
-            if (!include_old && x.StartTime != null && x.GetNextStart() < DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            if (!include_old && x.StartTime != null && x.GetNextStart() < now)
                 continue;
 
             ids += $"`{_swizzler.Swizzle(x.ScheduledEventId)}`\n";

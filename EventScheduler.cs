@@ -29,7 +29,9 @@ public sealed class EventScheduler
 
         await db.ScheduledEventOccurences.ExecuteDeleteAsync();
 
-        var futureEvents = await db.ScheduledEvents.Where(e => e.Recurrence != ScheduledEvent.RecurrenceKind.Once || (e.StartTime - e.ReminderDuration) > now || e.StartTime > now).ToListAsync();
+        Console.WriteLine("Wiped occurrences.");
+
+        var futureEvents = await db.ScheduledEvents.Where(e => e.Recurrence != ScheduledEvent.RecurrenceKind.Once || e.StartTime > now).ToListAsync();
 
         foreach (var e in futureEvents)
         {
@@ -37,6 +39,8 @@ public sealed class EventScheduler
         }
 
         await db.SaveChangesAsync();
+
+        Console.WriteLine("Initialized upcoming occurrences.");
 
         await BumpTimer(db);
 
@@ -119,9 +123,9 @@ public sealed class EventScheduler
         PokeTimer(nextStart.Value);
     }
 
-    public Task DeleteOccurrences(ComfyContext db, ScheduledEvent e)
+    public void DeleteOccurrences(ComfyContext db, ScheduledEvent e)
     {
-        throw new NotImplementedException();
+        db.RemoveRange(db.ScheduledEventOccurences.Where(x => x.ScheduledEventId == e.ScheduledEventId));
     }
 
     private void InsertOccurrences(ComfyContext db, ScheduledEvent e, long now)
@@ -173,7 +177,7 @@ public sealed class EventScheduler
             _current_timer = new Timer(OnTimer);
             _current_timer.Change(TimeSpan.FromSeconds(duration), Timeout.InfiniteTimeSpan);
             _current_timer_due = due;
-            Console.WriteLine($"New timer due at {_current_timer_due}");
+            Console.WriteLine($"New timer due at {DateTimeOffset.FromUnixTimeSeconds(_current_timer_due).LocalDateTime}");
             return;
         }
 

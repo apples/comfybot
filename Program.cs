@@ -58,6 +58,8 @@ async Task MainAsync()
     {
         await interactions.RegisterCommandsGloballyAsync();
 
+        Console.WriteLine($"Slash commands: {String.Join(", ", interactions.SlashCommands.Select(x => "/" + x.ToString()))}");
+
         Console.WriteLine($"Client is connected and ready!");
     };
 
