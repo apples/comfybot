@@ -26,8 +26,24 @@ public class SwizzleService
 
 
         Console.WriteLine($"SwizzleService loaded swizzler {_swizzle}, {_swizzle_inv}");
-        var v = (ulong)Random.Shared.NextInt64();
-        Console.WriteLine($"    Random test: {v} => {Swizzle(v)} => {UnSwizzle(Swizzle(v))}");
+
+        var v = 0ul;
+        while (v == 0) v = (ulong)Random.Shared.NextInt64();
+
+        var swizzle_v = Swizzle(v);
+
+        var unswizzle_v = UnSwizzle(swizzle_v);
+
+        Console.WriteLine($"    Random test: {v} => {swizzle_v} => {unswizzle_v}");
+
+        if (v != unswizzle_v)
+        {
+            throw new Exception("Swizzle test failed. Please regenerate the swizzle value.");
+        }
+        else
+        {
+            Console.WriteLine("    Swizzle test passed.");
+        }
     }
 
     public string Swizzle(ulong v)
