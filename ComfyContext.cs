@@ -24,7 +24,6 @@ public class ComfyContext : DbContext
             System.IO.Directory.CreateDirectory(path);
         }
         DbPath = System.IO.Path.Join(path, "data.db");
-        Console.WriteLine($"Using database \"{DbPath}\"");
     }
 
     // The following configures EF to create a Sqlite database file in the
