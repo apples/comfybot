@@ -6,12 +6,13 @@ First, make an `appsettings.local.json` file.
 
 Get your Discord bot token, and put it into `appsettings.local.json`.
 
+DO NOT EVER NEVER EVER put the Discord token into `appsettings.json` (this is the wrong file!).
+
 Launch the bot with `dotnet run`.
 
-In the console output, you will see something like:
+## Database Migrations
 
 ```
-No swizzler found, using: FB6B62C7BE90E663 (SAVE THIS TO CONFIG)
+dotnet ef migrations add Whatever
+dotnet ef database update
 ```
-
-Copy that swizzler value and put it into `appsettings.local.json`.

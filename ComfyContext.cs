@@ -10,6 +10,7 @@ public class ComfyContext : DbContext
     public DbSet<ScheduledEvent> ScheduledEvents { get; set; }
     public DbSet<ScheduledEventOccurrence> ScheduledEventOccurences { get; set; }
     public DbSet<GuildSettings> GuildSettings { get; set; }
+    public DbSet<ComfyConfig> ComfyConfigs { get; set; }
 
     public string DbPath { get; }
 
@@ -127,4 +128,11 @@ public class ScheduledEventOccurrence
     public bool IsReminder { get; set; }
 
     public ScheduledEvent? ScheduledEvent { get; set; }
+}
+
+public class ComfyConfig
+{
+    [Key, DatabaseGenerated(DatabaseGeneratedOption.None)]
+    public string Key { get; set; } = "";
+    public string? Value { get; set; }
 }

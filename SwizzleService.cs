@@ -1,20 +1,44 @@
 
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Org.BouncyCastle.Math;
 
 public class SwizzleService
 {
+    private IServiceProvider _services;
+
     private ulong _swizzle;
     private ulong _swizzle_inv;
 
-    public void Initialize(string? swizzler)
+    public SwizzleService(IServiceProvider services)
     {
-        if (string.IsNullOrWhiteSpace(swizzler))
+        _services = services;
+    }
+
+    public async Task InitializeAsync()
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ComfyContext>();
+
+        var swizzlerConfig = await db.ComfyConfigs.FindAsync("swizzler");
+
+        if (swizzlerConfig == null)
         {
-            swizzler = Generate();
-            Console.WriteLine($"No swizzler found, using: {swizzler} (SAVE THIS TO CONFIG)");
+            swizzlerConfig = new ComfyConfig { Key = "swizzler", Value = Generate() };
+            db.ComfyConfigs.Add(swizzlerConfig);
+            await db.SaveChangesAsync();
+            Console.WriteLine($"No swizzler config found, generated a fresh one.");
         }
 
+        if (string.IsNullOrWhiteSpace(swizzlerConfig.Value))
+        {
+            swizzlerConfig.Value = Generate();
+            await db.SaveChangesAsync();
+            Console.WriteLine($"Swizzler config was null, generated a fresh one.");
+        }
+
+        string swizzler = swizzlerConfig.Value;
+        
         var bytes = Convert.FromHexString(swizzler);
         _swizzle = BitConverter.ToUInt64(bytes.Reverse().ToArray());
 
@@ -24,8 +48,7 @@ public class SwizzleService
 
         _swizzle_inv = BitConverter.ToUInt64(inv.ToByteArrayUnsigned().Reverse().ToArray());
 
-
-        Console.WriteLine($"SwizzleService loaded swizzler {_swizzle}, {_swizzle_inv}");
+        Console.WriteLine($"SwizzleService loaded swizzler.");
 
         var v = 0ul;
         while (v == 0) v = (ulong)Random.Shared.NextInt64();
@@ -34,11 +57,14 @@ public class SwizzleService
 
         var unswizzle_v = UnSwizzle(swizzle_v);
 
-        Console.WriteLine($"    Random test: {v} => {swizzle_v} => {unswizzle_v}");
 
         if (v != unswizzle_v)
         {
-            throw new Exception("Swizzle test failed. Please regenerate the swizzle value.");
+            Console.WriteLine($"    Swizzle test failed. Please regenerate the swizzle value.");
+            Console.WriteLine($"    Bad swizzler value: {swizzler}");
+            Console.WriteLine($"    Swizzler coprimes: {_swizzle}, {_swizzle_inv}");
+            Console.WriteLine($"    Random test: {v} => {swizzle_v} => {unswizzle_v}");
+            throw new Exception("Swizzle test failed.");
         }
         else
         {

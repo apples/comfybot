@@ -50,9 +50,7 @@ async Task MainAsync()
     await serviceProvider.GetRequiredService<CommandHandler>().InitializeAsync();
     await serviceProvider.GetRequiredService<InteractionHandler>().InitializeAsync();
     await serviceProvider.GetRequiredService<EventScheduler>().InitializeAsync();
-    
-    var swizzler = config.GetRequiredSection("Settings")["Swizzler"];
-    serviceProvider.GetRequiredService<SwizzleService>().Initialize(swizzler);
+    await serviceProvider.GetRequiredService<SwizzleService>().InitializeAsync();
     
     client.Ready += async () =>
     {
